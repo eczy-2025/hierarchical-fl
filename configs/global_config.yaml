@@ -1,0 +1,43 @@
+# configs/global_config.yaml
+
+# ==========================================
+# 分层联邦学习全局配置文件
+# ==========================================
+
+system:
+  project_name: "Hierarchical-FL-Simulation"
+  random_seed: 42
+  log_level: "INFO"
+
+dataset:
+  name: "MNIST"
+  num_classes: 10
+  # 数据分布设置
+  partition: "noniid"  # 可选: iid, noniid
+  beta: 0.5            # Dirichlet 分布参数 (仅在 noniid 模式下有效，越小越不平衡)
+
+training:
+  global_rounds: 50        # 云端聚合的总轮数
+  
+  # 【Edge 内部聚合策略】
+  # 含义: Edge 在本地聚合多少次后，才向 Cloud 上传一次。
+  # 如果设为 1，则等同于“直通模式” (聚完即发)。
+  edge_internal_rounds: 3  
+  
+  # 【新增】动态参与与招募机制
+  online_rate: 0.8         # 客户端在线概率 (0.0 ~ 1.0)，模拟设备随机掉线
+  recruitment_time: 15      # Edge 开启新一轮时等待 Client 报名的窗口时间 (秒)
+  min_clients: 1           # 每一轮最少需要多少个客户端报名才开启训练，否则重试
+
+  local_epochs: 3          # Client 本地训练轮数
+  batch_size: 32
+  learning_rate: 0.01
+  momentum: 0.5
+  device: "cpu"            # 仿真环境下推荐 cpu
+
+model:
+  name: "SimpleCNN"
+
+network:
+  cloud_port: 5000
+  edge_base_port: 8000     # Edge端口从 8000 开始累加 (8001, 8002...)

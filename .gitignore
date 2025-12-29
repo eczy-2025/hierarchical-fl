@@ -1,0 +1,15 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 操作系统文件
+.DS_Store
+
+# 你的项目特定目录 (根据你的 README 结构)
+data/
+logs/
+output/
+
+# 虚拟环境 (如果有)
+venv/
+.env

@@ -1,0 +1,16 @@
+# requirements.txt
+
+# 核心计算库
+numpy>=1.21.0
+torch>=1.13.0        # 根据你的硬件情况，可选用 cpu 版本以减小体积
+torchvision>=0.14.0
+
+# 通信模块依赖 (HTTP API)
+Flask>=2.0.0
+requests>=2.26.0
+
+# 配置文件解析
+PyYAML>=6.0
+
+# 其他工具
+tqdm                # 进度条

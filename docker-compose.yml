@@ -1,0 +1,138 @@
+version: '3.8'
+
+services:
+  # ================= Cloud Server =================
+  cloud_server:
+    container_name: hfl_cloud
+    build: .
+    volumes:
+      - ./logs:/app/logs
+      - ./output:/app/output
+      - ./data:/app/data
+    command: >
+      python3 -m src.main
+      --role cloud 
+      --id 0
+      --port 5000
+    networks:
+      - global_net
+
+  # ================= Edge Server 1 =================
+  edge_server_1:
+    container_name: hfl_edge_1
+    build: .
+    depends_on:
+      - cloud_server
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    command: >
+      python3 -m src.main
+      --role edge
+      --id 1
+      --port 8001
+      --cloud_addr hfl_cloud
+      --cloud_port 5000
+      --num_clients 2
+    networks:
+      - global_net
+      - edge_1_local
+
+  # ================= Edge Server 2 =================
+  edge_server_2:
+    container_name: hfl_edge_2
+    build: .
+    depends_on:
+      - cloud_server
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    command: >
+      python3 -m src.main
+      --role edge
+      --id 2
+      --port 8002
+      --cloud_addr hfl_cloud
+      --cloud_port 5000
+      --num_clients 2
+    networks:
+      - global_net
+      - edge_2_local
+
+  # ================= Clients under Edge 1 =================
+  client_101:
+    container_name: hfl_client_1_1
+    build: .
+    depends_on:
+      - edge_server_1
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    command: >
+      python3 -m src.main
+      --role client
+      --id 101
+      --edge_addr hfl_edge_1
+      --edge_port 8001
+    networks:
+      - edge_1_local
+
+  client_102:
+    container_name: hfl_client_1_2
+    build: .
+    depends_on:
+      - edge_server_1
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    command: >
+      python3 -m src.main
+      --role client
+      --id 102
+      --edge_addr hfl_edge_1
+      --edge_port 8001
+    networks:
+      - edge_1_local
+
+  # ================= Clients under Edge 2 =================
+  client_201:
+    container_name: hfl_client_2_1
+    build: .
+    depends_on:
+      - edge_server_2
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    command: >
+      python3 -m src.main
+      --role client
+      --id 201
+      --edge_addr hfl_edge_2
+      --edge_port 8002
+    networks:
+      - edge_2_local
+
+  client_202:
+    container_name: hfl_client_2_2
+    build: .
+    depends_on:
+      - edge_server_2
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    command: >
+      python3 -m src.main
+      --role client
+      --id 202
+      --edge_addr hfl_edge_2
+      --edge_port 8002
+    networks:
+      - edge_2_local
+
+networks:
+  global_net:
+    driver: bridge
+  edge_1_local:
+    driver: bridge
+  edge_2_local:
+    driver: bridge
