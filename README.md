@@ -199,4 +199,3 @@ sudo docker compose logs -f
 |  | **`recruitment_time`** | **【新】** Edge 等待报名的窗口时间 (秒)，建议设为 10-15s 以适应 Docker 网络延迟。 |
 |  | **`min_clients`** | **【新】** 每一轮最少需要多少个客户端报名才开启训练，否则重试。 |
 
-| **model** | `name` | 模型名称 (如 SimpleCNN)。 |
