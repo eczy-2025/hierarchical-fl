@@ -27,16 +27,23 @@ class ClientModelManager:
         # 必须转为 CPU，否则序列化传输时会报错
         return {k: v.cpu() for k, v in self.model.state_dict().items()}
 
-    def train(self, train_loader):
+    def train(self, train_loader, assigned_epochs=None):
         """
         执行本地训练
         :param train_loader: DataLoader 对象
+        :param assigned_epochs: Edge 动态下发的自适应训练轮次
         :return: (weights, avg_loss, sample_count)
         """
         self.model.train()
-        
-        # 从配置读取超参数
-        epochs = self.config['training']['local_epochs']
+
+        # 【新增】如果有 Edge 下发的定制 Epoch，则使用定制值；否则回退到默认配置
+        if assigned_epochs is not None:
+            epochs = assigned_epochs
+            self.logger.info(f"Ada t&d-aware: Training for {epochs} epochs based on Edge instruction.")
+        else:
+            epochs = self.config['training']['local_epochs']
+            self.logger.info(f"Pre-training/Fallback: Training for fixed {epochs} epochs.")
+
         lr = self.config['training']['learning_rate']
         momentum = self.config['training']['momentum']
         

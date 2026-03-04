@@ -20,6 +20,9 @@ class EdgeModelManager:
         
         # 记录上一次同步的云端轮次，防止重复更新
         self.last_cloud_round = -1
+
+        # 【新增】存储每个 Client 历史的梯度散度 delta_i
+        self.divergence_history = {}
         
     def reset_threshold(self, num_participants):
         """
@@ -103,6 +106,20 @@ class EdgeModelManager:
                 factor = u['samples'] / total_samples
                 for key in aggregated_weights.keys():
                     aggregated_weights[key] += u['weights'][key] * factor
+
+            # 【新增】计算并记录每个参与者的梯度散度 delta_i
+            for u in updates:
+                client_id = u.get('id')
+                if client_id is not None:
+                    delta_i = 0.0
+                    for key in aggregated_weights.keys():
+                        # delta_i = || w_global_new - w_local_i ||^2
+                        diff = aggregated_weights[key] - u['weights'][key]
+                        delta_i += diff.norm(2).item() ** 2
+
+                    if client_id not in self.divergence_history:
+                        self.divergence_history[client_id] = []
+                    self.divergence_history[client_id].append(delta_i)
             
             # 清空队列
             self.received_updates = []
@@ -112,3 +129,14 @@ class EdgeModelManager:
                 "samples": total_samples,
                 "count": num_updates
             }
+
+    # 【新增】获取客户端平均梯度散度的方法
+    def get_gradient_divergence(self, client_id):
+        with self.lock:
+            # 如果是全新的客户端，给一个默认的基础散度
+            if client_id not in self.divergence_history or len(self.divergence_history[client_id]) == 0:
+                return 1.0
+
+            # 返回历史平均值 (摸底结果)
+            history = self.divergence_history[client_id]
+            return sum(history) / len(history)

@@ -51,10 +51,17 @@ class CloudManager:
         
         # 3. 主循环
         while True:
-            # 检查是否满足聚合条件
-            if self.model_mgr.check_aggregation_condition():
+            # =================================================================
+            # 【修改】检查是否满足 FedDoMA 的混合异步触发条件
+            # 这里的 check_aggregation_condition 将返回两个值：(是否触发, 触发原因)
+            # =================================================================
+            is_ready, reason = self.model_mgr.check_aggregation_condition()
+
+            if is_ready:
+                # 打印出极具成就感的 FedDoMA 动态触发日志！
+                self.logger.info(f"⚡ FedDoMA Triggered! Reason: {reason}")
                 self.logger.info("Aggregating Edge models...")
-                
+
                 if self.model_mgr.aggregate():
                     # 聚合后立即评估
                     loss, acc = self.model_mgr.evaluate(self.test_loader)

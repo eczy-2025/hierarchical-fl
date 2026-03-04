@@ -21,6 +21,10 @@ class ClientManager:
         # 【新增】读取在线率配置 (默认为 1.0 即 100% 在线)
         self.online_rate = config['training'].get('online_rate', 1.0)
 
+        # 【新增】模拟该 Client 的计算能力 (单轮耗时，比如 1.0 到 5.0 秒之间)
+        # 在真实的物理设备部署时，这里可以替换为真实的系统 Profiler 耗时测算
+        self.simulated_comp_time = random.uniform(1.0, 5.0)
+
     def start(self):
         self.logger.info(f"Client {self.id} started. Connecting to Edge: {self.edge_url}")
         self.logger.info(f"Strategy: Online Rate = {self.online_rate}")
@@ -57,17 +61,34 @@ class ClientManager:
                             # Client 会重新掷骰子，说不定下次就决定上线了
                             continue
 
-                        # 3. 【新增】尝试报名 (Join Round)
+                        # 3. 【修改】尝试报名，并带上自身的“数据与算力画像”
                         self.logger.info(f"Detected new version {remote_version}. Attempting to join...")
-                        
-                        # 向 Edge 发送报名请求
-                        join_resp = self.comm.post_data(f"{self.edge_url}/join_round", {"id": self.id})
-                        
+
+                        data_num = len(self.train_loader.dataset) if hasattr(self.train_loader, 'dataset') else 500
+                        join_payload = {
+                            "id": self.id,
+                            "data_num": data_num,
+                            "comp_time": self.simulated_comp_time
+                        }
+
+                        # 向 Edge 发送包含画像的报名请求
+                        join_resp = self.comm.post_data(f"{self.edge_url}/join_round", join_payload)
+
                         if join_resp and join_resp.status_code == 200:
                             # 报名成功！
                             self.logger.info("Join accepted! Downloading model...")
                             latest_weights = response['weights']
                             current_version = remote_version
+
+                            # 【修改】使用 pickle 解析 Edge 下发的二进制字典
+                            try:
+                                import pickle
+                                # 解包 Edge 传过来的 Pickle 二进制数据
+                                resp_data = pickle.loads(join_resp.content)
+                                assigned_epochs = resp_data.get("assigned_epochs", None)
+                            except Exception as e:
+                                self.logger.error(f"Failed to parse assigned epochs: {e}")
+                                assigned_epochs = None
                             # 跳出内层循环，进入 PHASE 2 训练
                             break
                         else:
@@ -86,12 +107,13 @@ class ClientManager:
 
             # ================= PHASE 2: 本地训练 =================
             self.logger.info(f"Starting training for round (v{current_version})...")
-            
+
             # 加载权重
             self.model_mgr.load_weights(latest_weights)
-            
-            # 执行训练
-            local_weights, train_loss, sample_count = self.model_mgr.train(self.train_loader)
+
+            # 【修改】执行训练时，传入 Edge 下发的 assigned_epochs
+            local_weights, train_loss, sample_count = self.model_mgr.train(self.train_loader,
+                                                                           assigned_epochs=assigned_epochs)
             
             # ================= PHASE 3: 上传结果 =================
             upload_data = {

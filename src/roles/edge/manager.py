@@ -30,18 +30,46 @@ class EdgeManager:
         self._register_routes()
 
     def _register_routes(self):
-        # 【新增】客户端报名接口
+        # 【修改】客户端报名接口
         def handle_join():
             from flask import request
+            import math  # 【新增】用于对数和开方计算
+
             try:
                 data = self.comm.deserialize_request(request)
                 client_id = data.get('id')
-                
+                # 记录客户端上传的画像信息 (可选，供日志或 Gekko 求解器备用)
+                data_num = data.get('data_num', 500)
+                comp_time = data.get('comp_time', 2.0)
+
                 with self.status_lock:
                     if self.status == "RECRUITING":
                         self.participants.add(client_id)
-                        self.logger.info(f"Client {client_id} joined the round.")
-                        return "OK"
+
+                        # --- Ada t&d-aware 核心分配逻辑 ---
+                        # 使用云端同步轮次作为全局时钟
+                        current_round = max(0, self.model_mgr.last_cloud_round)
+                        assigned_epochs = 3  # 预热期默认值
+                        delta_i = None
+
+                        # 假设前 5 轮为预热期，收集梯度散度
+                        if current_round > 2:
+                            delta_i = self.model_mgr.get_gradient_divergence(client_id)
+                            # 使用论文中的轻量级启发式公式
+                            phi = 15.0
+                            try:
+                                e_raw = math.log((phi / math.sqrt(delta_i)) + 1, 1.15)
+                                assigned_epochs = max(1, math.floor(e_raw))
+                            except Exception as e:
+                                self.logger.error(f"Epoch calculation error for {client_id}: {e}")
+                                assigned_epochs = 3
+
+                        self.logger.info(
+                            f"Client {client_id} joined. Assigned Epochs: {assigned_epochs} (Round: {current_round}, delta_i: {delta_i if delta_i is not None else 'N/A'})"
+                        )
+
+                        # 【重要修改】将原本返回的 "OK" 字符串改为序列化后的字典
+                        return self.comm.pickle_response({"assigned_epochs": assigned_epochs})
                     else:
                         # 如果不在招募期，拒绝加入
                         return "REJECT", 400
@@ -158,7 +186,12 @@ class EdgeManager:
                         upload_data = {
                             "id": self.id,
                             "weights": result['weights'],
-                            "samples": result['samples']
+                            "samples": result['samples'],
+                            # ==================================================
+                            # 【关键新增】：告诉云端，我这个边缘节点是基于第几轮
+                            # 全局模型训练出来的，这是计算"模型陈旧度(Staleness)"的唯一依据！
+                            # ==================================================
+                            "version": max(0, self.model_mgr.last_cloud_round)
                         }
                         self.comm.post_data(cloud_upload_url, upload_data)
                         self.logger.info(f"Target reached. Uploaded to Cloud.")

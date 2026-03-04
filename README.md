@@ -2,85 +2,57 @@
 
 ## 1. 系统概述
 
-本系统是一个基于 Docker 容器化技术的层级联邦学习（Hierarchical Federated Learning, HFL）仿真平台。系统严格遵循 **Cloud-Edge-Client（云-边-端）** 三层物理架构设计。
+本系统是一个基于 Docker 容器化技术的层级联邦学习（Hierarchical Federated Learning, HFL）仿真平台。系统严格遵循 **Cloud-Edge-Client（云-边-端）** 三层物理架构设计，旨在解决复杂异构网络中的“数据偏科”、“设备掉队”以及“广域网通信延迟”等核心痛点。
 
-**核心特性：**
+**核心算法特性：**
 
-* **分层架构**：支持 Cloud-Edge-Client 三层拓扑。
-* **通信优化**：支持 Edge 端本地多轮聚合 (Internal Rounds)，减少广域网通信。
-* **动态拓扑 (New)**：支持 **Edge 端动态招募** 与 **Client 端随机掉线/重连**，模拟真实不稳定的网络环境。
-* **鲁棒性 (New)**：具备自愈能力，能够处理节点掉线、参与度不足重试以及僵尸节点过滤。
+* **端边感知自适应同步 (Ada t&d-aware)**：边缘端具备“数据异构感知”能力，通过计算梯度散度动态为客户端分配个性化训练轮次（Epochs），限制偏科节点，鼓励优质节点。
+* **边云混合异步聚合 (FedDoMA)**：云端采用面向动态性的多元异步聚合框架。摒弃传统的死等机制，引入基于“到达数量”与“目标更新距离”的**双通道动态触发阀门**，并利用包含“陈旧度(Staleness)”与“相似度(Similarity)”的**多元加权算法 (MultiAsyncAgg)** 消除异步误差。
+* **动态拓扑与鲁棒性**：原生支持边缘动态招募与客户端随机掉线（Dropout）模拟，具备自愈与僵尸节点过滤能力。
 
-## 2. 系统总体架构与流程
+---
 
-系统采用 **“输入-处理-输出”** 的闭环设计模式，并引入了 **“招募-训练-聚合”** 的动态调度流程。
+## 2. 系统总体架构与核心算法流程
 
-### 2.1 输入层：全局配置 (Global Configuration)
+系统采用 **“预热摸底 -> 自适应分配 -> 局部同步 -> 全局异步”** 的复杂调度流程。
 
-系统通过统一的配置文件初始化仿真环境。
-
-* **配置文件**: `configs/global_config.yaml`
-* **核心配置**:
-* **数据分布**: Non-IID 分布控制（Dirichlet ）。
-* **动态参数**: `online_rate` (在线率), `recruitment_time` (招募窗口), `min_clients` (最少参与人数)。
-
-
-
-### 2.2 核心处理层：层级架构 (Hierarchical Architecture)
-
-#### A. 云服务器层 (Cloud Server Layer)
+### 2.1 云服务器层 (Cloud Server Layer)
 
 * **对应容器**: `cloud_server`
-* **核心功能**:
-1. **全局模型管理**: 维护全局模型与版本 (Global Round)。
-2. **轮次控制**: 仅在收到 Edge 的聚合结果后增加全局轮次，驱动系统向前演进。
-3. **全局评估**: 聚合后在测试集上评估模型精度。
+* **核心功能 (FedDoMA)**:
+1. **动态异步触发阀门 (Dynamic Trigger)**：
+* **数量触发**：更新队列模型数达到上限 $\bar{M}$（兜底防无限等待）。
+* **距离触发**：预测的全局模型更新幅度（L2 范数距离）接近动态设定的目标距离（自适应收敛步幅）。
+
+
+2. **多元异步聚合算法 (MultiAsyncAgg)**：
+* **陈旧度惩罚 ($\alpha_j$)**：通过解析 Edge 附带的版本号计算延迟轮次，应用指数衰减函数 $(1+\tau_j)^{-a}$ 降低过时模型的权重。
+* **相似度奖励 ($s_j$)**：计算边缘模型与全局模型更新方向的余弦相似度，赋予一致性高的模型更大权重。
+* **防偏移修正**：在综合数据量、陈旧度与相似度算出权重 $\theta_j$ 后，引入修正项 $(1-\Phi)w^t$ 补偿模型参数尺度，确保稳定收敛。
 
 
 
-#### B. 边缘服务器层 (Edge Server Layer)
+
+
+### 2.2 边缘服务器层 (Edge Server Layer)
 
 * **对应容器**: `edge_server_x`
-* **核心功能**:
-1. **动态招募 (Recruitment Phase)**:
-* 开启新一轮时，启动 `recruitment_time` 秒的倒计时窗口。
-* 接受 Client 的 `/join_round` 报名请求。
-* **动态阈值**: 窗口结束后，根据实际报名人数动态调整聚合阈值 (Threshold)。
-
-
-2. **自愈重试 (Retry Loop)**:
-* 若招募到的 Client 数量不足 `min_clients`，自动进入休眠并开启下一轮招募，防止死锁。
-
-
-3. **安全过滤 (Zombie Filter)**:
-* 拒绝非本轮报名名单内的 Client 提交更新，防止过时数据污染模型。
-
-
-4. **本地多轮迭代**: 执行 `edge_internal_rounds` 次本地聚合后，才向 Cloud 上传。
+* **核心功能 (Ada d-aware)**:
+1. **预训练摸底 (Pre-training)**：在最初的几轮（如 Round 0-2），下发固定 Epoch，并在后台计算各客户端局部梯度与全局梯度的距离，估算**梯度散度 $\delta_i$**。
+2. **自适应 Epoch 分配**：预热期结束后，利用启发式对数公式 $E_i = \lfloor \log(\frac{\phi}{\sqrt{\delta_i}} + 1) \rfloor$ 瞬间计算出专属迭代次数。数据越偏科（$\delta_i$ 大），分配的 $E_i$ 越小。
+3. **动态招募与层级聚合**：开启倒计时招募窗口，收集存活节点的报名。执行完指定次数的 `edge_internal_rounds`（节省带宽）后，附带当前基于的 `version` 版本号发往云端。
 
 
 
-#### C. 客户端层 (Client Layer)
+### 2.3 客户端层 (Client Layer)
 
 * **对应容器**: `client_x`
 * **核心功能**:
-1. **随机在线 (Simulated Dropout)**:
-* 检测到新版本后，根据 `online_rate` 概率决定本轮是否“在线”。
-* 若决定“掉线”，则休眠并跳过本轮，等待下一次机会。
+1. **精准执行指令**：不再使用写死的本地轮次，而是通过解析二进制 `Pickle` 流，严格按照 Edge 为其量身定制的 `assigned_epochs` 进行本地训练。
+2. **随机在线与自愈**：根据 `online_rate` 概率掷骰子决定本轮是否在线。
+3. **异构数据持有**：基于 Dirichlet 分布切分的强 Non-IID 本地数据集。
 
 
-2. **主动报名 (Active Joining)**:
-* 决定在线后，向 Edge 发送 `/join_round` 请求。
-* 仅在报名成功后下载模型并开始训练。
-
-
-3. **数据隔离**: 拥有互不重叠的本地私有数据集。
-
-
-
-### 2.3 输出层：结果可视化 (Output)
-
-* **输出**: 标准输出日志 (Logs) 与 `output/` 目录下的实验图表。
 
 ---
 
@@ -89,113 +61,82 @@
 ```text
 hierarchical-fl/
 ├── configs/
-│   └── global_config.yaml     # 【输入】全局配置文件 (含动态招募参数)
+│   └── global_config.yaml     # 【输入】全局配置文件 (Non-IID分布, 掉线率等)
 ├── data/                      # 数据集挂载点
-├── logs/                      # 【输出】训练日志统一存放点
-├── output/                    # 【输出】实验结果图表
+├── logs/                      # 训练日志统一存放点
 ├── src/
 │   ├── modules/               # 通用基础模块 (Communication, DataSlicer, Model)
-│   ├── roles/                 # 角色逻辑实现
-│   │   ├── cloud/             # Cloud: 全局聚合
-│   │   ├── edge/              # Edge: 招募窗口、动态阈值、内部聚合
-│   │   │   ├── manager.py     # 业务逻辑 (招募状态机)
-│   │   │   └── model_mgr.py   # 模型管理 (动态重置阈值)
-│   │   └── client/            # Client: 随机掉线、主动报名
-│   │       └── manager.py     # 业务逻辑 (状态轮询)
-│   ├── main.py                # 系统启动入口
-│   └── utils.py
+│   ├── roles/                 
+│   │   ├── cloud/             
+│   │   │   ├── manager.py     # 业务逻辑 (FedDoMA 双通道动态触发轮询)
+│   │   │   └── model_mgr.py   # 模型大脑 (MultiAsyncAgg 算法, 余弦相似度, 陈旧度计算)
+│   │   ├── edge/              
+│   │   │   ├── manager.py     # 业务逻辑 (对数公式分配 Epochs, 携带 Version 上传)
+│   │   │   └── model_mgr.py   # 模型大脑 (梯度散度 delta_i 计算与历史缓存)
+│   │   └── client/            
+│   │       ├── manager.py     # 业务逻辑 (解析 Pickle 获取定制 Epoch, 随机 Dropout)
+│   │       └── model_mgr.py   # 执行层 (基于动态 Epochs 执行前向与反向传播)
+│   └── main.py                # 系统启动入口
 ├── Dockerfile                 # 容器构建文件
-└── docker-compose.yml         # 物理拓扑编排
+└── docker-compose.yml         # 物理拓扑编排 (1 Cloud, 2 Edge, 4 Client)
 
 ```
 
 ---
 
-## 4. 网络拓扑与部署
-
-系统利用 Docker Network 实现层级隔离。在 `docker-compose.yml` 中，Edge 节点通过参数定义其辖区，但聚合逻辑已升级为动态适应实际在线人数。
-
----
-
-## 5. 快速开始指南
-
-### 前置要求
-
-确保本机已安装 Docker 和 Docker Compose。
+## 4. 快速开始指南
 
 ### 启动步骤
 
-1. **清理旧容器** (防止命名冲突):
+1. **清理旧容器** (防止端口或命名冲突):
+
 ```bash
 sudo docker rm -f hfl_cloud hfl_edge_1 hfl_edge_2 hfl_client_1_1 hfl_client_1_2 hfl_client_2_1 hfl_client_2_2
 
 ```
 
+2. **构建并启动集群**:
 
-2. **构建并启动**:
 ```bash
 sudo docker compose up --build
 
 ```
 
+### 预期的高级算法日志 (Feature Validation)
 
-3. **查看实时日志**:
-```bash
-sudo docker compose logs -f
+本系统的核心创新将通过以下极具辨识度的日志展现：
 
-```
+**1. 端边层：数据感知与自适应分配 (Ada t&d-aware)**
 
-
-
-### 预期日志流 (Feature Validation)
-
-您将在日志中观察到以下特征，证明系统的动态特性正在运行：
-
-1. **Edge 开启招募**:
 ```text
-[EDGE_1] 📢 Recruitment started. Waiting 15s for clients...
+[EDGE_1] Client 101 joined. Assigned Epochs: 22 (Round: 4, delta_i: 0.483)  <-- 偏科限制
+[EDGE_1] Client 102 joined. Assigned Epochs: 25 (Round: 4, delta_i: 0.203)  <-- 优质奖励
+[CLIENT_102] Ada t&d-aware: Training for 25 epochs based on Edge instruction.
 
 ```
 
+**2. 边云层：动态触发与多元加权 (FedDoMA)**
 
-2. **Client 随机决策**:
 ```text
-[CLIENT_101] Detected new version. Attempting to join...
-[CLIENT_102] Feature: Client decided to be OFFLINE... Sleeping.  <-- 模拟掉线
+[CLOUD_0] ⚡ FedDoMA Triggered! Reason: Max Queue Size Reached (2/2)
+[CLOUD_0] Aggregating Edge models...
+[CLOUD_0] [FedDoMA] Update 0 -> alpha: 1.0000, sim: 0.9839, theta: 0.3440  <-- 陈旧度与相似度打分
+[CLOUD_0] [FedDoMA] Update 1 -> alpha: 1.0000, sim: 0.9859, theta: 0.6471
+[CLOUD_0] === Global Round 4 Result ===
+[CLOUD_0]     Accuracy : 82.34%
 
 ```
-
-
-3. **动态阈值设定**:
-```text
-[EDGE_1] Client 101 joined the round.
-[EDGE_1] 🏁 Recruitment closed. Participants: 1. Threshold set to 1. <-- 自动适应在线人数
-
-```
-
-
-4. **异常处理 (如无人报名)**:
-```text
-[EDGE_1] Not enough clients (0 < 1). Retry needed.
-[EDGE_1] Retrying recruitment in 2s... <-- 自愈重试
-
-```
-
-
 
 ---
 
-## 6. 配置说明 (global_config.yaml)
+## 5. 核心超参数配置说明
 
-主要可调参数说明：
+除传统的通信轮次配置外，系统内嵌了以下与算法深度相关的超参数（可在源码或 YAML 中扩展调整）：
 
-| 参数模块 | 参数名 | 说明 |
+| 所属模块 | 参数 / 概念 | 说明 |
 | --- | --- | --- |
-| **dataset** | `partition` | 设置为 `"noniid"` 开启非独立同分布模拟。 |
-|  | `beta` | 控制数据异构程度（越小越不平衡）。 |
-| **training** | `global_rounds` | 云端总聚合次数。 |
-|  | `edge_internal_rounds` | Edge 在上传 Cloud 前，本地聚合的次数。 |
-|  | **`online_rate`** | **【新】** 客户端在线概率 (0.0 ~ 1.0)。 |
-|  | **`recruitment_time`** | **【新】** Edge 等待报名的窗口时间 (秒)，建议设为 10-15s 以适应 Docker 网络延迟。 |
-|  | **`min_clients`** | **【新】** 每一轮最少需要多少个客户端报名才开启训练，否则重试。 |
-
+| **Data Slicer** | `partition: "noniid"` | 开启狄利克雷分布，制造数据异质性（测试算法防御能力的先决条件）。 |
+| **Client** | `online_rate` | 客户端在线概率 (如 0.8)，用于测试系统的防死锁与自愈鲁棒性。 |
+| **Edge (Ada)** | $\phi$ (Phi) | 启发式对数公式的调节因子。$\phi$ 越大，分配的平均 Epoch 越高。 |
+| **Cloud (FedDoMA)** | `max_queue_size` | 异步队列数量触发阈值 $\bar{M}$。 |
+| **Cloud (FedDoMA)** | `stale_ratio` / `hetero_ratio` | 多元聚合时，陈旧度惩罚与相似度奖励所占的比重系数（默认 0.4 / 0.6）。 |
